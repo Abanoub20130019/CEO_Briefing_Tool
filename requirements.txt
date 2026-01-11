@@ -1,0 +1,6 @@
+streamlit
+pandas
+google-generativeai
+openai
+pillow
+openpyxl
