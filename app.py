@@ -61,6 +61,14 @@ def main():
         st.session_state['gemini_api_key'] = saved_settings.get('gemini_api_key', '')
     if 'openai_api_key' not in st.session_state:
         st.session_state['openai_api_key'] = saved_settings.get('openai_api_key', '')
+    if 'azure_api_key' not in st.session_state:
+        st.session_state['azure_api_key'] = saved_settings.get('azure_api_key', '')
+    if 'azure_endpoint' not in st.session_state:
+        st.session_state['azure_endpoint'] = saved_settings.get('azure_endpoint', '')
+    if 'azure_version' not in st.session_state:
+        st.session_state['azure_version'] = saved_settings.get('azure_version', '2024-02-15-preview')
+    if 'azure_deployment' not in st.session_state:
+        st.session_state['azure_deployment'] = saved_settings.get('azure_deployment', '')
     
     # Init other state
     if 'extracted_metrics' not in st.session_state:
@@ -100,10 +108,18 @@ CEO"""
         
         st.subheader("🤖 AI Provider")
         # Load saved provider/model
-        default_provider_idx = 0 if saved_settings.get('provider') != "OpenAI" else 1
-        provider = st.radio("Select Provider", ["Google Gemini", "OpenAI"], index=default_provider_idx, label_visibility="collapsed")
+        provider_options = ["Google Gemini", "OpenAI", "Azure OpenAI"]
+        saved_provider = saved_settings.get('provider', "Google Gemini")
+        default_provider_idx = provider_options.index(saved_provider) if saved_provider in provider_options else 0
+        
+        provider = st.radio("Select Provider", provider_options, index=default_provider_idx, label_visibility="collapsed")
         
         st.subheader("🔑 Credentials")
+        
+        active_api_key = ""
+        model_name = None
+        azure_config = None
+
         if provider == "Google Gemini":
             api_key_input = st.text_input("Gemini API Key", type="password", value=st.session_state['gemini_api_key'])
             if api_key_input:
@@ -116,7 +132,7 @@ CEO"""
             
             model_name = st.selectbox("Model", gemini_models, index=model_index)
             
-        else:
+        elif provider == "OpenAI":
             api_key_input = st.text_input("OpenAI API Key", type="password", value=st.session_state['openai_api_key'])
             if api_key_input:
                 st.session_state['openai_api_key'] = api_key_input
@@ -127,6 +143,37 @@ CEO"""
             model_index = openai_models.index(saved_model) if saved_model in openai_models else 0
             
             model_name = st.selectbox("Model", openai_models, index=model_index)
+            
+        elif provider == "Azure OpenAI":
+            # API Key
+            api_key_input = st.text_input("Azure API Key", type="password", value=st.session_state['azure_api_key'])
+            if api_key_input:
+                st.session_state['azure_api_key'] = api_key_input
+            active_api_key = st.session_state['azure_api_key']
+            
+            # Endpoint
+            endpoint_input = st.text_input("Azure Endpoint", value=st.session_state['azure_endpoint'], help="https://YOUR_RESOURCE.openai.azure.com/")
+            if endpoint_input:
+                st.session_state['azure_endpoint'] = endpoint_input
+                
+            # Version
+            version_input = st.text_input("API Version", value=st.session_state['azure_version'], help="e.g., 2024-02-15-preview")
+            if version_input:
+                 st.session_state['azure_version'] = version_input
+                 
+            # Deployment
+            deployment_input = st.text_input("Deployment Name", value=st.session_state['azure_deployment'], help="The name of your deployed model")
+            if deployment_input:
+                st.session_state['azure_deployment'] = deployment_input
+            
+            azure_config = {
+                "endpoint": st.session_state['azure_endpoint'],
+                "version": st.session_state['azure_version'],
+                "deployment": st.session_state['azure_deployment']
+            }
+            # For Azure, model_name is effectively the deployment name, used for display
+            model_name = st.session_state['azure_deployment']
+
 
         with st.expander("Advanced Settings"):
             system_instruction = st.text_area("System Prompt", value=saved_settings.get('system_prompt', "You are an Executive Assistant. Be precise, professional, and data-driven."))
@@ -134,13 +181,23 @@ CEO"""
         if st.button("💾 Save Configuration"):
             save_setting('gemini_api_key', st.session_state['gemini_api_key'])
             save_setting('openai_api_key', st.session_state['openai_api_key'])
+            
+            # Save Azure settings
+            save_setting('azure_api_key', st.session_state['azure_api_key'])
+            save_setting('azure_endpoint', st.session_state['azure_endpoint'])
+            save_setting('azure_version', st.session_state['azure_version'])
+            save_setting('azure_deployment', st.session_state['azure_deployment'])
+
             save_setting('provider', provider)
-            save_setting('model_name', model_name)
+            # Only save model_name if not Azure (since Azure uses Deployment)
+            if provider != "Azure OpenAI":
+                save_setting('model_name', model_name)
+            
             save_setting('system_prompt', system_instruction)
             st.success("Settings Saved!")
 
         st.markdown("---")
-        st.caption("v1.4 | AI-Powered Briefs")
+        st.caption("v1.5 | AI-Powered Briefs")
 
     # --- Main Content ---
     # Use tabs for major functional areas
@@ -236,7 +293,15 @@ CEO"""
                             bytes_data = m_file.getvalue()
                             file_type = m_file.type
                             
-                            metrics_json_str = extract_metrics_from_file(bytes_data, file_type, active_api_key, provider, model_name)
+                            # Update extraction call to include Azure config
+                            metrics_json_str = extract_metrics_from_file(
+                                bytes_data, 
+                                file_type, 
+                                active_api_key, 
+                                provider, 
+                                model_name,
+                                azure_config=azure_config
+                            )
                             metrics_json_str = metrics_json_str.replace("```json", "").replace("```", "").strip()
                             
                             try:
@@ -262,7 +327,18 @@ CEO"""
 
                         # 3. Generating
                         status.write("Drafting Email...")
-                        final_email = generate_email(notes, json.dumps(all_metrics_data), market_text_context, sample_text, active_api_key, provider, model_name, system_instruction)
+                        # Update generation call to include Azure config
+                        final_email = generate_email(
+                            notes, 
+                            json.dumps(all_metrics_data), 
+                            market_text_context, 
+                            sample_text, 
+                            active_api_key, 
+                            provider, 
+                            model_name, 
+                            system_instruction,
+                            azure_config=azure_config
+                        )
                         st.session_state['generated_email'] = final_email
                         
                         status.update(label="Brief Generated Successfully!", state="complete", expanded=False)

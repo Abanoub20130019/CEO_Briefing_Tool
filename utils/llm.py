@@ -1,5 +1,5 @@
 import google.generativeai as genai
-from openai import OpenAI
+from openai import OpenAI, AzureOpenAI
 import base64
 import json
 
@@ -32,7 +32,6 @@ def extract_metrics_with_gemini(file_bytes, mime_type, api_key, model_name="gemi
 
 def extract_metrics_with_openai(file_bytes, mime_type, api_key, model_name="gpt-4o"):
     client = OpenAI(api_key=api_key)
-    
     base64_url = get_image_base64(file_bytes, mime_type)
     
     prompt = """
@@ -50,12 +49,7 @@ def extract_metrics_with_openai(file_bytes, mime_type, api_key, model_name="gpt-
                 "role": "user",
                 "content": [
                     {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": base64_url,
-                        },
-                    },
+                    {"type": "image_url", "image_url": {"url": base64_url}},
                 ],
             }
         ],
@@ -63,20 +57,61 @@ def extract_metrics_with_openai(file_bytes, mime_type, api_key, model_name="gpt-
     )
     return response.choices[0].message.content
 
-def extract_metrics_from_file(file_bytes, mime_type, api_key, provider, model_name=None):
+def extract_metrics_with_azure(file_bytes, mime_type, api_key, azure_endpoint, api_version, deployment_name):
+    client = AzureOpenAI(
+        api_key=api_key,
+        api_version=api_version,
+        azure_endpoint=azure_endpoint
+    )
+    
+    base64_url = get_image_base64(file_bytes, mime_type)
+    
+    prompt = """
+    Analyze this image/document. Identify the table with Brand performance. 
+    Extract the 'Sales vs BP %' and 'Margin vs BP %' for these specific brands: 
+    [SBX, H&M, PM, VS, BBW, S.SHACK, AEO, R.CANES, FL, CT, CHIP, ULTA]. 
+    Return the result as a strict JSON object.
+    Format: {"SBX": {"sales": "-6%", "margin": "-4%"}, ...}
+    """
+
+    response = client.chat.completions.create(
+        model=deployment_name,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": base64_url}},
+                ],
+            }
+        ],
+        response_format={ "type": "json_object" }
+    )
+    return response.choices[0].message.content
+
+def extract_metrics_from_file(file_bytes, mime_type, api_key, provider, model_name=None, azure_config=None):
     if provider == "Google Gemini":
         model = model_name if model_name else "gemini-1.5-flash"
         return extract_metrics_with_gemini(file_bytes, mime_type, api_key, model)
     elif provider == "OpenAI":
         model = model_name if model_name else "gpt-4o"
         return extract_metrics_with_openai(file_bytes, mime_type, api_key, model)
+    elif provider == "Azure OpenAI":
+        if not azure_config:
+            raise ValueError("Azure config missing")
+        return extract_metrics_with_azure(
+            file_bytes, 
+            mime_type, 
+            api_key, 
+            azure_config['endpoint'], 
+            azure_config['version'], 
+            azure_config['deployment']
+        )
     else:
         raise ValueError("Invalid Provider")
 
 def generate_email_with_gemini(system_instruction, combined_prompt, api_key, model_name="gemini-1.5-flash"):
     genai.configure(api_key=api_key)
-    # Gemini doesn't strictly have "system" role in the same way as OpenAI if using generate_content simply,
-    # but we can pass it as a system instruction if creating the model.
     model = genai.GenerativeModel(model_name, system_instruction=system_instruction)
     response = model.generate_content(combined_prompt)
     return response.text
@@ -92,7 +127,22 @@ def generate_email_with_openai(system_instruction, combined_prompt, api_key, mod
     )
     return response.choices[0].message.content
 
-def generate_email(notes, metrics_json, report_text, sample_text, api_key, provider, model_name=None, system_instruction_override=None):
+def generate_email_with_azure(system_instruction, combined_prompt, api_key, azure_endpoint, api_version, deployment_name):
+    client = AzureOpenAI(
+        api_key=api_key,
+        api_version=api_version,
+        azure_endpoint=azure_endpoint
+    )
+    response = client.chat.completions.create(
+        model=deployment_name,
+        messages=[
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": combined_prompt}
+        ]
+    )
+    return response.choices[0].message.content
+
+def generate_email(notes, metrics_json, report_text, sample_text, api_key, provider, model_name=None, system_instruction_override=None, azure_config=None):
     
     default_system_instruction = "You are an Executive Assistant."
     system_instruction = system_instruction_override if system_instruction_override else default_system_instruction
@@ -117,5 +167,16 @@ def generate_email(notes, metrics_json, report_text, sample_text, api_key, provi
     elif provider == "OpenAI":
         model = model_name if model_name else "gpt-4o"
         return generate_email_with_openai(system_instruction, prompt, api_key, model)
+    elif provider == "Azure OpenAI":
+        if not azure_config:
+            raise ValueError("Azure config missing")
+        return generate_email_with_azure(
+            system_instruction, 
+            prompt, 
+            api_key, 
+            azure_config['endpoint'], 
+            azure_config['version'], 
+            azure_config['deployment']
+        )
     else:
         raise ValueError("Invalid Provider")
