@@ -252,7 +252,7 @@ CEO"""
             
             st.subheader("2️⃣ The Voice")
             with st.container(border=True):
-                st.markdown("**CEO Notes / Intro**")
+                st.markdown("**Hamza's Email**")
                 eml_notes = st.file_uploader("Import from Email (.eml)", type=['eml'], key="eml_notes")
                 if eml_notes:
                     parsed_body = parse_eml_content(eml_notes.getvalue())
