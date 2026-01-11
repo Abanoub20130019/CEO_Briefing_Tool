@@ -112,3 +112,16 @@ def load_settings():
         data = {}
     conn.close()
     return data
+
+def reset_database():
+    """Clear all data from the database."""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        c.execute("DELETE FROM weekly_metrics")
+        c.execute("DELETE FROM settings")
+        conn.commit()
+    except Exception as e:
+        print(f"Error resetting database: {e}")
+    finally:
+        conn.close()

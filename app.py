@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import datetime
 import json
-from utils.db import init_db, save_metrics, get_metrics, get_all_weeks, get_comparison_data, save_setting, load_settings
+from utils.db import init_db, save_metrics, get_metrics, get_all_weeks, get_comparison_data, save_setting, load_settings, reset_database
 from utils.llm import extract_metrics_from_file, generate_email
 from utils.eml import parse_eml_content
 
@@ -197,7 +197,18 @@ CEO"""
             st.success("Settings Saved!")
 
         st.markdown("---")
-        st.caption("v1.5 | AI-Powered Briefs")
+        
+        # Danger Zone
+        with st.expander("⚠️ Danger Zone", expanded=False):
+            st.error("This action is irreversible!")
+            if st.button("🧨 Factory Reset (Clear All Data)", type="primary"):
+                reset_database()
+                # Clear session state objects
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.rerun()
+
+        st.caption("v1.6 | AI-Powered Briefs")
 
     # --- Main Content ---
     # Use tabs for major functional areas
