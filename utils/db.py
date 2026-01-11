@@ -5,9 +5,11 @@ import os
 DB_NAME = "weekly_data.db"
 
 def init_db():
-    """Initialize the SQLite database and create the table if it doesn't exist."""
+    """Initialize the SQLite database and create tables if they doesn't exist."""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    
+    # Metrics Table
     c.execute('''
         CREATE TABLE IF NOT EXISTS weekly_metrics (
             week_id TEXT,
@@ -17,9 +19,19 @@ def init_db():
             PRIMARY KEY (week_id, brand)
         )
     ''')
+    
+    # Settings Table
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
+# --- Metrics Functions ---
 def save_metrics(week_id, metrics_data):
     """
     Save or replace metrics for a specific week.
@@ -61,8 +73,6 @@ def get_comparison_data(week1_id, week2_id):
     """
     Get comparison data for two weeks.
     Returns a DataFrame with columns: Brand, {week1}_Sales, {week2}_Sales, etc.
-    This logic might be handled in the UI/App layer using pandas merging, 
-    but fetching raw data here is good.
     """
     df1 = get_metrics(week1_id)
     df2 = get_metrics(week2_id)
@@ -81,3 +91,24 @@ def get_comparison_data(week1_id, week2_id):
         return df2
     else:
         return pd.DataFrame()
+
+# --- Settings Functions ---
+def save_setting(key, value):
+    """Save a single setting."""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
+    conn.commit()
+    conn.close()
+
+def load_settings():
+    """Load all settings as a dictionary."""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        c.execute('SELECT key, value FROM settings')
+        data = dict(c.fetchall())
+    except sqlite3.OperationalError:
+        data = {}
+    conn.close()
+    return data

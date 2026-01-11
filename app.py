@@ -2,8 +2,9 @@ import streamlit as st
 import pandas as pd
 import datetime
 import json
-from utils.db import init_db, save_metrics, get_metrics, get_all_weeks, get_comparison_data
+from utils.db import init_db, save_metrics, get_metrics, get_all_weeks, get_comparison_data, save_setting, load_settings
 from utils.llm import extract_metrics_from_file, generate_email
+from utils.eml import parse_eml_content
 
 # Initialize Database
 init_db()
@@ -43,22 +44,55 @@ def main():
     st.title("🧊 Universal CEO Brief Generator")
     st.markdown("Generate executive-level briefs from raw data in seconds.")
 
+    # --- Load Persisted Settings ---
+    saved_settings = load_settings()
+
     # Initialize Session State
     if 'gemini_api_key' not in st.session_state:
-        st.session_state['gemini_api_key'] = ''
+        st.session_state['gemini_api_key'] = saved_settings.get('gemini_api_key', '')
     if 'openai_api_key' not in st.session_state:
-        st.session_state['openai_api_key'] = ''
+        st.session_state['openai_api_key'] = saved_settings.get('openai_api_key', '')
+    
+    # Init other state
     if 'extracted_metrics' not in st.session_state:
         st.session_state['extracted_metrics'] = None
     if 'generated_email' not in st.session_state:
         st.session_state['generated_email'] = ""
+    # Init default note value if not present (allows EML overwrite)
+    if 'notes_content' not in st.session_state:
+        st.session_state['notes_content'] = ""
+
+    # Default Style Reference
+    default_sample = """Subject: Weekly CEO Brief - Week 42
+
+Team,
+
+Solid performance this week driven by [Brand A] and [Brand B]. We are seeing strong conversion in MENA despite footfall challenges.
+
+CORE 12 PERFORMANCE:
+| Brand | Sales vs BP | Margin vs BP |
+|-------|-------------|--------------|
+| SBX   | +5%         | +2%          |
+| H&M   | -1%         | +0.5%        |
+...
+
+MARKET HIGHLIGHTS:
+- KSA: Strong start to the holiday season.
+- UAE: Traffic flat, conversion up.
+
+Focus for next week is inventory consolidation.
+
+Regards,
+CEO"""
 
     # --- SIDEBAR: Settings & Configuration ---
     with st.sidebar:
         st.header("⚙️ Configuration")
         
         st.subheader("🤖 AI Provider")
-        provider = st.radio("Select Provider", ["Google Gemini", "OpenAI"], label_visibility="collapsed")
+        # Load saved provider/model
+        default_provider_idx = 0 if saved_settings.get('provider') != "OpenAI" else 1
+        provider = st.radio("Select Provider", ["Google Gemini", "OpenAI"], index=default_provider_idx, label_visibility="collapsed")
         
         st.subheader("🔑 Credentials")
         if provider == "Google Gemini":
@@ -67,7 +101,11 @@ def main():
                 st.session_state['gemini_api_key'] = api_key_input
             active_api_key = st.session_state['gemini_api_key']
             
-            model_name = st.selectbox("Model", ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3-pro-preview", "gemini-3-flash-preview"])
+            gemini_models = ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-3-pro-preview", "gemini-3-flash-preview"]
+            saved_model = saved_settings.get('model_name', gemini_models[0])
+            model_index = gemini_models.index(saved_model) if saved_model in gemini_models else 0
+            
+            model_name = st.selectbox("Model", gemini_models, index=model_index)
             
         else:
             api_key_input = st.text_input("OpenAI API Key", type="password", value=st.session_state['openai_api_key'])
@@ -75,13 +113,25 @@ def main():
                 st.session_state['openai_api_key'] = api_key_input
             active_api_key = st.session_state['openai_api_key']
             
-            model_name = st.selectbox("Model", ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"])
+            openai_models = ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo"]
+            saved_model = saved_settings.get('model_name', openai_models[0])
+            model_index = openai_models.index(saved_model) if saved_model in openai_models else 0
+            
+            model_name = st.selectbox("Model", openai_models, index=model_index)
 
         with st.expander("Advanced Settings"):
-            system_instruction = st.text_area("System Prompt", value="You are an Executive Assistant. Be precise, professional, and data-driven.")
+            system_instruction = st.text_area("System Prompt", value=saved_settings.get('system_prompt', "You are an Executive Assistant. Be precise, professional, and data-driven."))
+
+        if st.button("💾 Save Configuration"):
+            save_setting('gemini_api_key', st.session_state['gemini_api_key'])
+            save_setting('openai_api_key', st.session_state['openai_api_key'])
+            save_setting('provider', provider)
+            save_setting('model_name', model_name)
+            save_setting('system_prompt', system_instruction)
+            st.success("Settings Saved!")
 
         st.markdown("---")
-        st.caption("v1.2 | AI-Powered Briefs")
+        st.caption("v1.4 | AI-Powered Briefs")
 
     # --- Main Content ---
     # Use tabs for major functional areas
@@ -113,48 +163,47 @@ def main():
             
             with st.container(border=True):
                 st.markdown("**Sales & Margin Data**")
-                # Modified to accept multiple files
                 metrics_files = st.file_uploader("Upload Image/PDF/XLSX", type=['png', 'jpg', 'jpeg', 'pdf', 'xlsx'], key="metrics", accept_multiple_files=True)
                 if metrics_files:
                     st.success(f"{len(metrics_files)} files uploaded", icon="✅")
             
             with st.container(border=True):
                 st.markdown("**Market Report (Context)**")
-                # Modified to accept multiple files
                 market_files = st.file_uploader("Upload PDF", type=['pdf'], key="market", accept_multiple_files=True)
                 if market_files:
                     st.info(f"{len(market_files)} reports attached", icon="📎")
             
             st.subheader("2️⃣ The Voice")
             with st.container(border=True):
-                notes = st.text_area("CEO Notes / Intro", height=150, placeholder="E.g., Great work on inventory management this week...")
+                st.markdown("**CEO Notes / Intro**")
+                eml_notes = st.file_uploader("Import from Email (.eml)", type=['eml'], key="eml_notes")
+                if eml_notes:
+                    parsed_body = parse_eml_content(eml_notes.getvalue())
+                    st.session_state['notes_content'] = parsed_body
+                    st.info("Notes imported from email!", icon="📧")
+                
+                notes = st.text_area("Edit Notes", value=st.session_state['notes_content'], height=150, placeholder="E.g., Great work on inventory management this week...")
+                # Sync back manually if edited
+                st.session_state['notes_content'] = notes
 
         with col_right:
             st.subheader("3️⃣ Style & Output")
             
-            default_sample = """Subject: Weekly CEO Brief - Week 42
+            # Load saved style or default
+            style_content = saved_settings.get('style_reference', default_sample)
+            
+            # Allow EML import for style
+            eml_style = st.file_uploader("Import Style from Email (.eml)", type=['eml'], key="eml_style")
+            if eml_style:
+                parsed_style = parse_eml_content(eml_style.getvalue())
+                style_content = parsed_style
+                st.info("Style imported from email!", icon="📧")
 
-Team,
-
-Solid performance this week driven by [Brand A] and [Brand B]. We are seeing strong conversion in MENA despite footfall challenges.
-
-CORE 12 PERFORMANCE:
-| Brand | Sales vs BP | Margin vs BP |
-|-------|-------------|--------------|
-| SBX   | +5%         | +2%          |
-| H&M   | -1%         | +0.5%        |
-...
-
-MARKET HIGHLIGHTS:
-- KSA: Strong start to the holiday season.
-- UAE: Traffic flat, conversion up.
-
-Focus for next week is inventory consolidation.
-
-Regards,
-CEO"""
-            with st.expander("📝 Edit Style Reference", expanded=False):
-                sample_text = st.text_area("Sample Output", value=default_sample, height=300)
+            with st.expander("📝 Edit Style Reference (Default)", expanded=False):
+                sample_text = st.text_area("Sample Output", value=style_content, height=300)
+                if st.button("💾 Save as Default Style"):
+                    save_setting('style_reference', sample_text)
+                    st.success("Style Template Saved!")
 
             st.markdown("###") # Spacer
             generate_btn = st.button("✨ Generate Brief", type="primary", use_container_width=True)
@@ -173,19 +222,16 @@ CEO"""
                         status.write("Analyzing Sales Data...")
                         all_metrics_data = {}
                         
-                        # Iterate through all uploaded metrics files
                         for idx, m_file in enumerate(metrics_files):
                             status.write(f"Reading file {idx+1}/{len(metrics_files)}...")
                             bytes_data = m_file.getvalue()
                             file_type = m_file.type
                             
-                            # Extract
                             metrics_json_str = extract_metrics_from_file(bytes_data, file_type, active_api_key, provider, model_name)
                             metrics_json_str = metrics_json_str.replace("```json", "").replace("```", "").strip()
                             
                             try:
                                 file_metrics = json.loads(metrics_json_str)
-                                # Merge into main dict (newer files overwrite older keys if duplicates exist)
                                 all_metrics_data.update(file_metrics)
                             except json.JSONDecodeError as e:
                                 st.warning(f"Could not parse JSON from file {m_file.name}")
@@ -199,7 +245,6 @@ CEO"""
                         
                         # 2. Context from Multiple Files
                         status.write("Reading Context...")
-                        # Placeholder logic extended for multiple files
                         market_text_context = ""
                         if market_files:
                             market_text_context = f"Context provided in {len(market_files)} attached Market Report files. "
