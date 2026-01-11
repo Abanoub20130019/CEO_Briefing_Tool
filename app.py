@@ -11,9 +11,9 @@ init_db()
 
 def main():
     st.set_page_config(
-        page_title="Universal CEO Brief Generator", 
+        page_title="CEO Brief Generator", 
         layout="wide",
-        page_icon="🧊"
+        page_icon="assets/logo.png"
     )
     
     # Custom CSS for Premium UI
@@ -41,7 +41,16 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("🧊 Universal CEO Brief Generator")
+    # Use columns to position logo next to title
+    col_logo, col_title = st.columns([2, 8])
+    with col_logo:
+        try:
+            st.image("assets/logo_header.png", width=200)
+        except:
+             st.write("🧊") # Fallback
+    with col_title:
+        st.title("CEO Brief Generator")
+    
     st.markdown("Generate executive-level briefs from raw data in seconds.")
 
     # --- Load Persisted Settings ---
