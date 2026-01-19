@@ -253,11 +253,15 @@ CEO"""
             st.subheader("2️⃣ The Voice")
             with st.container(border=True):
                 st.markdown("**Hamza's Email**")
-                eml_notes = st.file_uploader("Import from Email (.eml)", type=['eml'], key="eml_notes")
+                eml_notes = st.file_uploader("Import from Email (.eml)", type=['eml'], key="eml_notes", accept_multiple_files=True)
                 if eml_notes:
-                    parsed_body = parse_eml_content(eml_notes.getvalue())
-                    st.session_state['notes_content'] = parsed_body
-                    st.info("Notes imported from email!", icon="📧")
+                    combined_notes = []
+                    for eml_file in eml_notes:
+                         parsed_body = parse_eml_content(eml_file.getvalue())
+                         combined_notes.append(f"--- Source: {eml_file.name} ---\n{parsed_body}")
+                    
+                    st.session_state['notes_content'] = "\n\n".join(combined_notes)
+                    st.info(f"Notes imported from {len(eml_notes)} emails!", icon="📧")
                 
                 notes = st.text_area("Edit Notes", value=st.session_state['notes_content'], height=150, placeholder="E.g., Great work on inventory management this week...")
                 # Sync back manually if edited
